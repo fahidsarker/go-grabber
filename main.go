@@ -10,11 +10,53 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
 	"golang.org/x/net/html"
 )
+
+// Google Drive URL patterns and utilities
+
+// isGoogleDriveURL checks if a URL is a Google Drive URL
+func isGoogleDriveURL(urlStr string) bool {
+	return strings.Contains(urlStr, "drive.google.com") || strings.Contains(urlStr, "docs.google.com")
+}
+
+// extractGoogleDriveFileID extracts the file ID from various Google Drive URL formats
+func extractGoogleDriveFileID(urlStr string) string {
+	// Pattern 1: https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+	re1 := regexp.MustCompile(`drive\.google\.com/file/d/([a-zA-Z0-9_-]+)`)
+	if matches := re1.FindStringSubmatch(urlStr); len(matches) > 1 {
+		return matches[1]
+	}
+
+	// Pattern 2: https://drive.google.com/open?id=FILE_ID
+	re2 := regexp.MustCompile(`drive\.google\.com/open\?id=([a-zA-Z0-9_-]+)`)
+	if matches := re2.FindStringSubmatch(urlStr); len(matches) > 1 {
+		return matches[1]
+	}
+
+	// Pattern 3: https://docs.google.com/document/d/FILE_ID/edit
+	re3 := regexp.MustCompile(`docs\.google\.com/(?:document|spreadsheets|presentation)/d/([a-zA-Z0-9_-]+)`)
+	if matches := re3.FindStringSubmatch(urlStr); len(matches) > 1 {
+		return matches[1]
+	}
+
+	return ""
+}
+
+// convertToGoogleDriveDownloadURL converts a Google Drive sharing URL to a direct download URL
+func convertToGoogleDriveDownloadURL(urlStr string) string {
+	fileID := extractGoogleDriveFileID(urlStr)
+	if fileID == "" {
+		return urlStr // Return original if we can't extract file ID
+	}
+
+	// Convert to direct download URL
+	return fmt.Sprintf("https://drive.google.com/uc?export=download&id=%s", fileID)
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -38,12 +80,12 @@ func printUsage() {
 	fmt.Println("Go Grabber - File download utility")
 	fmt.Println("")
 	fmt.Println("Usage:")
-	fmt.Println("  grabber dl [-workers=N] [-d|-debug] -from-url=<URL> -o=<output_dir>")
-	fmt.Println("  grabber dl [-workers=N] [-d|-debug] -from-file=<exported_file> -o=<output_dir>")
-	fmt.Println("  grabber dl [-workers=N] [-d|-debug] -from-html=<html_file> -o=<output_dir>")
-	fmt.Println("  grabber export [-d|-debug] -from-url=<URL> -o=<output_file>")
-	fmt.Println("  grabber export [-d|-debug] -from-file=<urls_file> -o=<output_file>")
-	fmt.Println("  grabber export [-d|-debug] -from-html=<html_file> -o=<output_file>")
+	fmt.Println("  grabber dl [-workers=N] [-d|-debug] [-allow-g-drive] -from-url=<URL> -o=<output_dir>")
+	fmt.Println("  grabber dl [-workers=N] [-d|-debug] [-allow-g-drive] -from-file=<exported_file> -o=<output_dir>")
+	fmt.Println("  grabber dl [-workers=N] [-d|-debug] [-allow-g-drive] -from-html=<html_file> -o=<output_dir>")
+	fmt.Println("  grabber export [-d|-debug] [-allow-g-drive] -from-url=<URL> -o=<output_file>")
+	fmt.Println("  grabber export [-d|-debug] [-allow-g-drive] -from-file=<urls_file> -o=<output_file>")
+	fmt.Println("  grabber export [-d|-debug] [-allow-g-drive] -from-html=<html_file> -o=<output_file>")
 	fmt.Println("")
 	fmt.Println("Commands:")
 	fmt.Println("  dl      Download files from URL, exported file, or HTML file")
@@ -56,6 +98,7 @@ func printUsage() {
 	fmt.Println("  -from-html=FILE  HTML file to parse for downloadable files")
 	fmt.Println("  -o=PATH          Output directory for downloads or output file for export")
 	fmt.Println("  -d, -debug       Enable debug mode (saves HTML content to debug.html)")
+	fmt.Println("  -allow-g-drive   Allow detection and conversion of Google Drive URLs")
 }
 
 func handleDownload() {
@@ -67,6 +110,7 @@ func handleDownload() {
 	output := fs.String("o", "", "Output directory")
 	debug := fs.Bool("debug", false, "Enable debug mode (saves HTML to debug.html)")
 	debugShort := fs.Bool("d", false, "Enable debug mode (saves HTML to debug.html)")
+	allowGDrive := fs.Bool("allow-g-drive", false, "Allow detection and conversion of Google Drive URLs")
 
 	fs.Parse(os.Args[2:])
 
@@ -101,7 +145,7 @@ func handleDownload() {
 
 	if *fromURL != "" {
 		debugMode := *debug || *debugShort
-		urlLinks, err := extractLinksFromURL(*fromURL, debugMode)
+		urlLinks, err := extractLinksFromURL(*fromURL, debugMode, *allowGDrive)
 		if err != nil {
 			fmt.Printf("Error extracting links from URL: %v\n", err)
 			return
@@ -117,8 +161,18 @@ func handleDownload() {
 			fmt.Printf("Error reading links from file: %v\n", err)
 			return
 		}
+		// Convert Google Drive URLs if flag is enabled
+		if *allowGDrive {
+			for i := range links {
+				if isGoogleDriveURL(links[i].URL) {
+					originalURL := links[i].URL
+					links[i].URL = convertToGoogleDriveDownloadURL(originalURL)
+					fmt.Printf("Converted Google Drive URL: %s -> %s\n", originalURL, links[i].URL)
+				}
+			}
+		}
 	} else if *fromHTML != "" {
-		htmlLinks, err := extractLinksFromHTMLFile(*fromHTML)
+		htmlLinks, err := extractLinksFromHTMLFile(*fromHTML, *allowGDrive)
 		if err != nil {
 			fmt.Printf("Error extracting links from HTML file: %v\n", err)
 			return
@@ -155,6 +209,7 @@ func handleExport() {
 	output := fs.String("o", "", "Output file to save URLs")
 	debug := fs.Bool("debug", false, "Enable debug mode (saves HTML to debug.html)")
 	debugShort := fs.Bool("d", false, "Enable debug mode (saves HTML to debug.html)")
+	allowGDrive := fs.Bool("allow-g-drive", false, "Allow detection and conversion of Google Drive URLs")
 
 	fs.Parse(os.Args[2:])
 
@@ -189,7 +244,7 @@ func handleExport() {
 
 	if *fromURL != "" {
 		// Single URL mode (existing functionality)
-		links, err := extractLinksFromURL(*fromURL, debugMode)
+		links, err := extractLinksFromURL(*fromURL, debugMode, *allowGDrive)
 		if err != nil {
 			fmt.Printf("Error extracting links from URL: %v\n", err)
 			return
@@ -207,7 +262,7 @@ func handleExport() {
 
 		for i, url := range urls {
 			fmt.Printf("Processing URL %d/%d: %s\n", i+1, len(urls), url)
-			links, err := extractLinksFromURL(url, debugMode)
+			links, err := extractLinksFromURL(url, debugMode, *allowGDrive)
 			if err != nil {
 				fmt.Printf("Warning: Error extracting links from URL %s: %v\n", url, err)
 				continue
@@ -217,7 +272,7 @@ func handleExport() {
 		}
 	} else if *fromHTML != "" {
 		// HTML file mode
-		links, err := extractLinksFromHTMLFile(*fromHTML)
+		links, err := extractLinksFromHTMLFile(*fromHTML, *allowGDrive)
 		if err != nil {
 			fmt.Printf("Error extracting links from HTML file: %v\n", err)
 			return
@@ -241,7 +296,7 @@ func handleExport() {
 	fmt.Printf("URLs exported to: %s\n", *output)
 }
 
-func extractLinksFromHTMLFile(htmlFilePath string) ([]string, error) {
+func extractLinksFromHTMLFile(htmlFilePath string, allowGDrive bool) ([]string, error) {
 	// Read HTML file
 	htmlContent, err := os.ReadFile(htmlFilePath)
 	if err != nil {
@@ -255,10 +310,10 @@ func extractLinksFromHTMLFile(htmlFilePath string) ([]string, error) {
 	}
 
 	// Extract links from HTML without a base URL (only absolute URLs)
-	return extractFileLinksFromHTML(doc), nil
+	return extractFileLinksFromHTML(doc, allowGDrive), nil
 }
 
-func extractFileLinksFromHTML(n *html.Node) []string {
+func extractFileLinksFromHTML(n *html.Node, allowGDrive bool) []string {
 	var links []string
 	totalHref := 0
 
@@ -271,7 +326,12 @@ func extractFileLinksFromHTML(n *html.Node) []string {
 					totalHref++
 					// Only process absolute URLs (starting with http:// or https://)
 					if strings.HasPrefix(href, "http://") || strings.HasPrefix(href, "https://") {
-						if hasAllowedExt(href) {
+						// Check for Google Drive URLs if flag is enabled
+						if allowGDrive && isGoogleDriveURL(href) {
+							convertedURL := convertToGoogleDriveDownloadURL(href)
+							fmt.Printf("Found Google Drive URL: %s -> %s\n", href, convertedURL)
+							links = append(links, convertedURL)
+						} else if hasAllowedExt(href) {
 							links = append(links, href)
 						}
 					}
@@ -289,7 +349,7 @@ func extractFileLinksFromHTML(n *html.Node) []string {
 	return links
 }
 
-func extractLinksFromURL(startURL string, debug bool) ([]string, error) {
+func extractLinksFromURL(startURL string, debug bool, allowGDrive bool) ([]string, error) {
 	// Fetch and parse HTML
 	resp, err := http.Get(startURL)
 	if err != nil {
@@ -328,7 +388,7 @@ func extractLinksFromURL(startURL string, debug bool) ([]string, error) {
 		return nil, fmt.Errorf("invalid base URL: %v", err)
 	}
 
-	return extractFileLinks(doc, baseURL), nil
+	return extractFileLinks(doc, baseURL, allowGDrive), nil
 }
 
 func saveHTMLToDebugFile(htmlContent []byte) error {
@@ -462,7 +522,7 @@ func downloadFiles(links []LinkWithDir, outputDir string, workers int) {
 	wg.Wait()
 }
 
-func extractFileLinks(n *html.Node, base *url.URL) []string {
+func extractFileLinks(n *html.Node, base *url.URL, allowGDrive bool) []string {
 	var links []string
 	totalHref := 0
 
@@ -474,8 +534,15 @@ func extractFileLinks(n *html.Node, base *url.URL) []string {
 					href := attr.Val
 					if u, err := base.Parse(href); err == nil {
 						totalHref++
-						if hasAllowedExt(u.String()) {
-							links = append(links, u.String())
+						fullURL := u.String()
+
+						// Check for Google Drive URLs if flag is enabled
+						if allowGDrive && isGoogleDriveURL(fullURL) {
+							convertedURL := convertToGoogleDriveDownloadURL(fullURL)
+							fmt.Printf("Found Google Drive URL: %s -> %s\n", fullURL, convertedURL)
+							links = append(links, convertedURL)
+						} else if hasAllowedExt(fullURL) {
+							links = append(links, fullURL)
 						}
 					}
 				}
@@ -550,7 +617,28 @@ func downloadFileToSubDir(fileURL, outputDir, subDir string) error {
 		return fmt.Errorf("bad status: %s", resp.Status)
 	}
 
-	fileName := path.Base(resp.Request.URL.Path)
+	// Try to get filename from Content-Disposition header first (Google Drive uses this)
+	fileName := ""
+	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
+		if strings.Contains(cd, "filename=") {
+			parts := strings.Split(cd, "filename=")
+			if len(parts) > 1 {
+				fileName = strings.Trim(parts[1], `"`)
+				// Remove any path separators for security
+				fileName = filepath.Base(fileName)
+			}
+		}
+	}
+
+	// Fallback to URL path if no filename in header
+	if fileName == "" {
+		fileName = path.Base(resp.Request.URL.Path)
+	}
+
+	// If still no good filename, generate one
+	if fileName == "" || fileName == "." || fileName == "/" {
+		fileName = "downloaded_file"
+	}
 
 	// Create the target directory (base output + subdirectory)
 	var targetDir string

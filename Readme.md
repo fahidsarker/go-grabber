@@ -7,8 +7,10 @@ Go Grabber is a command-line tool for downloading files from URLs. It can parse 
 - **Multiple operation modes**: Download directly from URLs or from exported URL files
 - **Export functionality**: Save discovered downloadable URLs to a file for later use
 - **Concurrent downloads**: Configurable number of worker threads for parallel downloads (default: 4)
+- **Google Drive support**: Automatically detects and converts Google Drive sharing URLs to direct download links
 - **Universal file support**: Automatically detects and downloads files with any extension
 - **Directory organization**: Support for subdirectory structure in URL files using comments
+- **Debug mode**: Save HTML content to debug.html for troubleshooting
 - **Robust error handling**: Clear error messages and graceful failure handling
 - **Cross-platform**: Works on Windows, macOS, and Linux
 - **Dependency minimal**: Only requires `golang.org/x/net` for HTML parsing
@@ -52,19 +54,37 @@ Go Grabber supports two main commands: `dl` (download) and `export`.
 ### Download Files from URL
 Download all files found on a webpage:
 ```bash
-./grabber dl -from-url=<URL> -o=<output_directory> [-workers=N]
+./grabber dl -from-url=<URL> -o=<output_directory> [-workers=N] [-allow-g-drive] [-d|-debug]
 ```
 
 ### Download Files from Exported File
 Download files from a previously exported URL list:
 ```bash
-./grabber dl -from-file=<url_file> -o=<output_directory> [-workers=N]
+./grabber dl -from-file=<url_file> -o=<output_directory> [-workers=N] [-allow-g-drive]
+```
+
+### Download Files from HTML File
+Download files from a local HTML file:
+```bash
+./grabber dl -from-html=<html_file> -o=<output_directory> [-workers=N] [-allow-g-drive]
 ```
 
 ### Export URLs to File
 Extract and save downloadable URLs from a webpage:
 ```bash
-./grabber export -from-url=<URL> -o=<output_file>
+./grabber export -from-url=<URL> -o=<output_file> [-allow-g-drive] [-d|-debug]
+```
+
+### Export URLs from Multiple Sources
+Extract URLs from multiple webpages listed in a file:
+```bash
+./grabber export -from-file=<urls_file> -o=<output_file> [-allow-g-drive] [-d|-debug]
+```
+
+### Export URLs from HTML File
+Extract URLs from a local HTML file:
+```bash
+./grabber export -from-html=<html_file> -o=<output_file> [-allow-g-drive]
 ```
 
 ### Examples
@@ -74,14 +94,29 @@ Extract and save downloadable URLs from a webpage:
 ./grabber dl -from-url=https://example.com/files -o=./downloads -workers=8
 ```
 
+**Download files with Google Drive support:**
+```bash
+./grabber dl -from-url=https://example.com/files -o=./downloads -allow-g-drive
+```
+
 **Export URLs for later use:**
 ```bash
 ./grabber export -from-url=https://example.com/files -o=urls.txt
 ```
 
+**Export URLs with debug mode enabled:**
+```bash
+./grabber export -from-url=https://example.com/files -o=urls.txt -debug
+```
+
 **Download from exported URL file:**
 ```bash
 ./grabber dl -from-file=urls.txt -o=./downloads -workers=4
+```
+
+**Process multiple URLs from a file:**
+```bash
+./grabber export -from-file=multiple_urls.txt -o=all_downloadable_urls.txt
 ```
 
 ## Command Reference
@@ -93,8 +128,11 @@ Extract and save downloadable URLs from a webpage:
 ### Flags
 - `-workers=N` - Number of concurrent workers (default: 4)
 - `-from-url=URL` - Source URL to parse for downloadable files
-- `-from-file=FILE` - File containing URLs to download (one per line)
+- `-from-file=FILE` - File containing URLs (for dl: exported file, for export: list of URLs)
+- `-from-html=FILE` - HTML file to parse for downloadable files
 - `-o=PATH` - Output directory for downloads or output file for export
+- `-d, -debug` - Enable debug mode (saves HTML content to debug.html)
+- `-allow-g-drive` - Allow detection and conversion of Google Drive URLs
 
 ## URL File Format
 
@@ -127,6 +165,35 @@ https://example.com/backup.tar.gz
 ```
 
 Files listed after a `# directory_name` comment will be downloaded to `output_dir/directory_name/`.
+
+## Google Drive Support
+
+Go Grabber can detect and convert Google Drive sharing URLs to direct download links when the `-allow-g-drive` flag is used.
+
+### Supported Google Drive URL Formats
+
+- `https://drive.google.com/file/d/FILE_ID/view?usp=sharing`
+- `https://drive.google.com/open?id=FILE_ID`
+- `https://docs.google.com/document/d/FILE_ID/edit`
+- `https://docs.google.com/spreadsheets/d/FILE_ID/edit`
+- `https://docs.google.com/presentation/d/FILE_ID/edit`
+
+### Example
+
+```bash
+# Enable Google Drive URL conversion
+./grabber dl -from-url=https://example.com/page-with-gdrive-links -o=./downloads -allow-g-drive
+```
+
+When a Google Drive URL is detected, it will be automatically converted to `https://drive.google.com/uc?export=download&id=FILE_ID` for direct downloading.
+
+## Debug Mode
+
+Use the `-debug` or `-d` flag to save the HTML content of parsed web pages to `debug.html`. This is useful for troubleshooting when expected files are not being detected.
+
+```bash
+./grabber export -from-url=https://example.com/files -o=urls.txt -debug
+```
 
 ## Requirements
 
